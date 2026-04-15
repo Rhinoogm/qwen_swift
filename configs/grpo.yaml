@@ -6,14 +6,14 @@ args:
   rlhf_type: "grpo"
   model: "outputs/sft_merged"
   dataset: "data/processed/grpo_train.jsonl"
-  external_plugins: "plugins/caption_reward.py"
+  external_plugins: "plugins/crop_reward.py"
   reward_funcs:
-    - "caption_semantic"
-    - "caption_rouge"
-    - "caption_format"
+    - "crop_iou"
+    - "crop_coord"
+    - "crop_reason_semantic"
   reward_weights:
-    - 0.6
-    - 0.3
+    - 0.7
+    - 0.2
     - 0.1
   tuner_type: "lora"
   target_modules: "all-linear"
@@ -32,7 +32,7 @@ args:
   learning_rate: 2.0e-5
   num_train_epochs: 1
   max_length: 1536
-  max_completion_length: 96
+  max_completion_length: 128
   temperature: 0.7
   top_p: 0.9
   save_total_limit: 2

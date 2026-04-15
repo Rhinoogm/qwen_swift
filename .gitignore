@@ -8,5 +8,7 @@ build/
 dist/
 outputs/
 metrics/
+data/raw/
+data/demo_dataset/
 data/processed/
 *.log

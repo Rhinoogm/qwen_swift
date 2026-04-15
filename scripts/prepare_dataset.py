@@ -9,11 +9,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from qwen_lora.data_utils import normalize_record, read_jsonl, to_grpo_record, to_sft_record, write_jsonl
+from qwen_lora.data_utils import audit_record, normalize_record, read_jsonl, to_grpo_record, to_sft_record, write_jsonl
+from qwen_lora.reward_core import average
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Validate raw annotations and prepare SFT/GRPO JSONL files.")
+    parser = argparse.ArgumentParser(description="Validate detector-aware crop annotations and prepare SFT/GRPO JSONL files.")
     parser.add_argument("--input", required=True, help="Raw annotation JSONL path.")
     parser.add_argument("--output-dir", required=True, help="Directory for processed JSONL outputs.")
     parser.add_argument("--root-dir", default=None, help="Dataset root for resolving relative image paths.")
@@ -46,8 +47,8 @@ def main() -> int:
 
     train_samples = [sample for sample in normalized if sample.split == "train"]
     val_samples = [sample for sample in normalized if sample.split in {"val", "test"}]
-
-    rl_samples = sorted(train_samples, key=lambda item: item.quality_score, reverse=True)[: args.rl_max_samples]
+    rl_samples = sorted(train_samples, key=lambda item: item.sample_id)[: args.rl_max_samples]
+    valid_audits = [audit_record(sample) for sample in normalized]
 
     sft_train_path = output_dir / "sft_train.jsonl"
     sft_val_path = output_dir / "sft_val.jsonl"
@@ -68,11 +69,16 @@ def main() -> int:
             "sft_val_rows": len(val_samples),
             "grpo_train_rows": len(rl_samples),
         },
+        "stats": {
+            "mean_reason_word_count": average(item["reason_word_count"] for item in valid_audits),
+            "mean_autocrop_teacher_iou": average(item["autocrop_teacher_iou"] for item in valid_audits),
+        },
         "settings": {
             "val_ratio": args.val_ratio,
             "rl_max_samples": args.rl_max_samples,
             "root_dir": args.root_dir,
         },
+        "valid_samples": valid_audits,
         "invalid_rows": invalid,
     }
     output_dir.mkdir(parents=True, exist_ok=True)

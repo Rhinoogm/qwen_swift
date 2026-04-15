@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 import warnings
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
-from .prompting import MAX_CAPTION_WORDS
+MAX_REASON_WORDS = 40
 
 MARKDOWN_PATTERNS = (
     re.compile(r"^\s*[-*+]\s+", re.MULTILINE),
@@ -46,34 +47,111 @@ def contains_speculative_language(text: str) -> bool:
     return any(pattern.search(text or "") for pattern in SPECULATIVE_PATTERNS)
 
 
-def is_empty(text: str) -> bool:
-    return not normalize_text(text)
-
-
 def is_single_sentence(text: str) -> bool:
     cleaned = normalize_text(text)
     if not cleaned or "\n" in (text or ""):
         return False
-    fragments = [frag.strip() for frag in re.split(r"[.!?]+", cleaned) if frag.strip()]
+    fragments = [fragment.strip() for fragment in re.split(r"[.!?]+", cleaned) if fragment.strip()]
     return len(fragments) <= 1
 
 
+def average(values: Iterable[float]) -> float:
+    materialized = list(values)
+    if not materialized:
+        return 0.0
+    return sum(materialized) / len(materialized)
+
+
+def percent(values: Iterable[float]) -> float:
+    return average(values) * 100.0
+
+
+def _as_float(value: Any, *, field_name: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be numeric") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{field_name} must be finite")
+    return number
+
+
+def _round_coord(value: float) -> float:
+    return round(float(value), 4)
+
+
 @dataclass(frozen=True)
-class CaptionFormatRules:
-    max_words: int = MAX_CAPTION_WORDS
+class BoundingBox:
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+
+    def rounded(self) -> "BoundingBox":
+        return BoundingBox(
+            x1=_round_coord(self.x1),
+            y1=_round_coord(self.y1),
+            x2=_round_coord(self.x2),
+            y2=_round_coord(self.y2),
+        )
+
+    def as_dict(self) -> dict[str, float]:
+        rounded = self.rounded()
+        return {
+            "x1": rounded.x1,
+            "y1": rounded.y1,
+            "x2": rounded.x2,
+            "y2": rounded.y2,
+        }
+
+
+@dataclass(frozen=True)
+class CropRecommendation:
+    best_crop: BoundingBox
+    reason: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "best_crop": self.best_crop.as_dict(),
+            "reason": normalize_text(self.reason),
+        }
+
+
+@dataclass(frozen=True)
+class PredictionInspection:
+    parse_ok: bool
+    valid_bbox: bool
+    reason: str
+    recommendation: CropRecommendation | None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class PredictionMetrics:
+    parse_ok: bool
+    valid_bbox: bool
+    reason_format_ok: bool
+    iou: float
+    coord_mae: float
+    reason_similarity: float
+
+
+@dataclass(frozen=True)
+class ReasonFormatRules:
+    max_words: int = MAX_REASON_WORDS
 
     def validate(self, text: str) -> list[str]:
         errors: list[str] = []
-        if is_empty(text):
-            errors.append("caption is empty")
+        if not normalize_text(text):
+            errors.append("reason is empty")
         if not is_single_sentence(text):
-            errors.append("caption must be a single sentence")
+            errors.append("reason must be a single sentence")
         if word_count(text) > self.max_words:
-            errors.append(f"caption exceeds {self.max_words} words")
+            errors.append(f"reason exceeds {self.max_words} words")
         if contains_markdown(text):
-            errors.append("caption contains markdown or list formatting")
+            errors.append("reason contains markdown or list formatting")
         if contains_speculative_language(text):
-            errors.append("caption contains speculative wording")
+            errors.append("reason contains speculative wording")
         return errors
 
     def score(self, text: str) -> float:
@@ -83,37 +161,126 @@ class CaptionFormatRules:
         return [self.score(text) for text in texts]
 
 
-def _lcs_length(left: Sequence[str], right: Sequence[str]) -> int:
-    if not left or not right:
-        return 0
-    dp = [0] * (len(right) + 1)
-    for ltok in left:
-        prev = 0
-        for idx, rtok in enumerate(right, start=1):
-            current = dp[idx]
-            if ltok == rtok:
-                dp[idx] = prev + 1
-            else:
-                dp[idx] = max(dp[idx], dp[idx - 1])
-            prev = current
-    return dp[-1]
+def parse_bbox_mapping(value: Mapping[str, Any], *, round_values: bool = False) -> BoundingBox:
+    bbox = BoundingBox(
+        x1=_as_float(value.get("x1"), field_name="x1"),
+        y1=_as_float(value.get("y1"), field_name="y1"),
+        x2=_as_float(value.get("x2"), field_name="x2"),
+        y2=_as_float(value.get("y2"), field_name="y2"),
+    )
+    if not (0.0 <= bbox.x1 < bbox.x2 <= 1.0):
+        raise ValueError("best_crop must satisfy 0 <= x1 < x2 <= 1")
+    if not (0.0 <= bbox.y1 < bbox.y2 <= 1.0):
+        raise ValueError("best_crop must satisfy 0 <= y1 < y2 <= 1")
+    return bbox.rounded() if round_values else bbox
 
 
-class RougeLScorer:
-    def score(self, prediction: str, reference: str) -> float:
-        pred_tokens = tokenize(prediction)
-        ref_tokens = tokenize(reference)
-        if not pred_tokens or not ref_tokens:
-            return 0.0
-        lcs = _lcs_length(pred_tokens, ref_tokens)
-        precision = lcs / len(pred_tokens)
-        recall = lcs / len(ref_tokens)
-        if precision + recall == 0:
-            return 0.0
-        return 2 * precision * recall / (precision + recall)
+def parse_crop_response_json(text: str) -> Mapping[str, Any]:
+    try:
+        payload = json.loads((text or "").strip())
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"prediction is not valid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("prediction must be a JSON object")
+    return payload
 
-    def batch_score(self, predictions: Sequence[str], references: Sequence[str]) -> list[float]:
-        return [self.score(pred, ref) for pred, ref in zip(predictions, references)]
+
+def coerce_crop_recommendation(
+    payload: Mapping[str, Any],
+    *,
+    round_values: bool = False,
+    validate_reason: bool = False,
+) -> CropRecommendation:
+    best_crop = payload.get("best_crop")
+    reason = payload.get("reason")
+    if not isinstance(best_crop, Mapping):
+        raise ValueError("best_crop must be an object")
+    if not isinstance(reason, str):
+        raise ValueError("reason must be a string")
+    recommendation = CropRecommendation(
+        best_crop=parse_bbox_mapping(best_crop, round_values=round_values),
+        reason=normalize_text(reason),
+    )
+    if validate_reason:
+        errors = ReasonFormatRules().validate(recommendation.reason)
+        if errors:
+            raise ValueError("; ".join(errors))
+    return recommendation
+
+
+def parse_crop_response(text: str, *, validate_reason: bool = False) -> CropRecommendation:
+    payload = parse_crop_response_json(text)
+    return coerce_crop_recommendation(payload, validate_reason=validate_reason)
+
+
+def format_crop_recommendation(recommendation: CropRecommendation) -> str:
+    bbox = recommendation.best_crop.rounded()
+    reason = normalize_text(recommendation.reason)
+    escaped_reason = json.dumps(reason, ensure_ascii=True)
+    return (
+        "{\n"
+        '  "best_crop": {\n'
+        f'    "x1": {bbox.x1:.4f},\n'
+        f'    "y1": {bbox.y1:.4f},\n'
+        f'    "x2": {bbox.x2:.4f},\n'
+        f'    "y2": {bbox.y2:.4f}\n'
+        "  },\n"
+        f'  "reason": {escaped_reason}\n'
+        "}"
+    )
+
+
+def inspect_prediction_text(text: str) -> PredictionInspection:
+    try:
+        payload = parse_crop_response_json(text)
+    except ValueError as exc:
+        return PredictionInspection(parse_ok=False, valid_bbox=False, reason="", recommendation=None, error=str(exc))
+
+    reason = payload.get("reason") if isinstance(payload.get("reason"), str) else ""
+    try:
+        recommendation = coerce_crop_recommendation(payload)
+    except ValueError as exc:
+        return PredictionInspection(
+            parse_ok=True,
+            valid_bbox=False,
+            reason=normalize_text(reason),
+            recommendation=None,
+            error=str(exc),
+        )
+    return PredictionInspection(
+        parse_ok=True,
+        valid_bbox=True,
+        reason=normalize_text(reason),
+        recommendation=recommendation,
+        error=None,
+    )
+
+
+def bbox_iou(left: BoundingBox, right: BoundingBox) -> float:
+    inter_x1 = max(left.x1, right.x1)
+    inter_y1 = max(left.y1, right.y1)
+    inter_x2 = min(left.x2, right.x2)
+    inter_y2 = min(left.y2, right.y2)
+    inter_w = max(0.0, inter_x2 - inter_x1)
+    inter_h = max(0.0, inter_y2 - inter_y1)
+    intersection = inter_w * inter_h
+    left_area = max(0.0, left.x2 - left.x1) * max(0.0, left.y2 - left.y1)
+    right_area = max(0.0, right.x2 - right.x1) * max(0.0, right.y2 - right.y1)
+    union = left_area + right_area - intersection
+    if union <= 0.0:
+        return 0.0
+    return intersection / union
+
+
+def mean_abs_coord_error(left: BoundingBox, right: BoundingBox) -> float:
+    return average(
+        [
+            abs(left.x1 - right.x1),
+            abs(left.y1 - right.y1),
+            abs(left.x2 - right.x2),
+            abs(left.y2 - right.y2),
+        ]
+    )
 
 
 class SemanticSimilarityScorer:
@@ -141,7 +308,7 @@ class SemanticSimilarityScorer:
             self._backend = "sentence_transformers"
         except Exception as exc:  # pragma: no cover - exercised only with optional deps missing
             warnings.warn(
-                f"Falling back to lexical semantic scorer because sentence-transformers "
+                "Falling back to lexical semantic scorer because sentence-transformers "
                 f"could not be loaded: {exc}",
                 RuntimeWarning,
             )
@@ -177,7 +344,7 @@ class SemanticSimilarityScorer:
             normalized_references = [normalize_text(item) for item in references]
             pred_embeddings = self._model.encode(normalized_predictions, normalize_embeddings=True)
             ref_embeddings = self._model.encode(normalized_references, normalize_embeddings=True)
-            scores = []
+            scores: list[float] = []
             for pred_embedding, ref_embedding in zip(pred_embeddings, ref_embeddings):
                 cosine = float(pred_embedding @ ref_embedding)
                 scores.append(max(0.0, min(1.0, cosine)))
@@ -185,83 +352,62 @@ class SemanticSimilarityScorer:
         return [self._fallback_score(pred, ref) for pred, ref in zip(predictions, references)]
 
 
-class BertScoreScorer:
-    def __init__(self, *, force_fallback: bool = False) -> None:
-        self.force_fallback = force_fallback
-        self._backend = None
-        self._semantic_fallback = SemanticSimilarityScorer(force_fallback=True)
+def evaluate_prediction(
+    prediction_text: str,
+    reference_bbox: BoundingBox,
+    reference_reason: str,
+    *,
+    semantic_scorer: SemanticSimilarityScorer | None = None,
+    reason_rules: ReasonFormatRules | None = None,
+) -> PredictionMetrics:
+    semantic_scorer = semantic_scorer or SemanticSimilarityScorer()
+    reason_rules = reason_rules or ReasonFormatRules()
+    inspection = inspect_prediction_text(prediction_text)
+    if not inspection.parse_ok:
+        return PredictionMetrics(
+            parse_ok=False,
+            valid_bbox=False,
+            reason_format_ok=False,
+            iou=0.0,
+            coord_mae=1.0,
+            reason_similarity=0.0,
+        )
+    if not inspection.valid_bbox or inspection.recommendation is None:
+        return PredictionMetrics(
+            parse_ok=True,
+            valid_bbox=False,
+            reason_format_ok=False,
+            iou=0.0,
+            coord_mae=1.0,
+            reason_similarity=0.0,
+        )
 
-    def _load_backend(self) -> None:
-        if self._backend is not None:
-            return
-        if self.force_fallback:
-            self._backend = "fallback"
-            return
-        try:
-            import bert_score  # noqa: F401
-
-            self._backend = "bert_score"
-        except Exception as exc:  # pragma: no cover - exercised only with optional deps missing
-            warnings.warn(
-                f"Falling back to lexical BERTScore proxy because bert-score could not "
-                f"be loaded: {exc}",
-                RuntimeWarning,
-            )
-            self._backend = "fallback"
-
-    def batch_score(self, predictions: Sequence[str], references: Sequence[str]) -> list[float]:
-        self._load_backend()
-        if self._backend == "bert_score":
-            from bert_score import score as bert_score
-
-            _, _, f1 = bert_score(
-                list(predictions),
-                list(references),
-                lang="en",
-                verbose=False,
-                rescale_with_baseline=False,
-            )
-            return [float(item) for item in f1]
-        return self._semantic_fallback.batch_score(predictions, references)
-
-
-def average(values: Iterable[float]) -> float:
-    values = list(values)
-    if not values:
-        return 0.0
-    return sum(values) / len(values)
+    reason_format_ok = not reason_rules.validate(inspection.recommendation.reason)
+    return PredictionMetrics(
+        parse_ok=True,
+        valid_bbox=True,
+        reason_format_ok=reason_format_ok,
+        iou=bbox_iou(inspection.recommendation.best_crop, reference_bbox),
+        coord_mae=mean_abs_coord_error(inspection.recommendation.best_crop, reference_bbox),
+        reason_similarity=semantic_scorer.score(inspection.recommendation.reason, reference_reason),
+    )
 
 
-def percent(values: Iterable[float]) -> float:
-    return average(values) * 100.0
-
-
-def empty_output_rate(texts: Sequence[str]) -> float:
-    if not texts:
-        return 0.0
-    empty_count = sum(1 for text in texts if is_empty(text))
-    return 100.0 * empty_count / len(texts)
-
-
-def average_word_count(texts: Sequence[str]) -> float:
-    if not texts:
-        return 0.0
-    return average(word_count(text) for text in texts)
-
-
-def acceptance_gate(candidate_metrics: dict[str, float], baseline_metrics: dict[str, float]) -> dict[str, object]:
-    bert_delta = candidate_metrics["bert_score_f1"] - baseline_metrics["bert_score_f1"]
-    rouge_delta = candidate_metrics["rouge_l"] - baseline_metrics["rouge_l"]
+def acceptance_gate(
+    candidate_metrics: Mapping[str, float],
+    baseline_metrics: Mapping[str, float],
+    autocrop_baseline_metrics: Mapping[str, float],
+) -> dict[str, object]:
     checks = {
-        "quality_improved": bert_delta >= 0.01 or rouge_delta >= 2.0,
-        "format_pass_rate": candidate_metrics["format_pass_rate"] >= 98.0,
-        "empty_output_rate": math.isclose(candidate_metrics["empty_output_rate"], 0.0, abs_tol=1e-9),
+        "json_parse_rate": candidate_metrics["json_parse_rate"] >= 99.0,
+        "valid_bbox_rate": candidate_metrics["valid_bbox_rate"] >= 99.0,
+        "beats_autocrop_iou": candidate_metrics["mean_iou_to_teacher"]
+        >= autocrop_baseline_metrics["mean_iou_to_teacher"] + 0.03,
+        "beats_sft_iou": candidate_metrics["mean_iou_to_teacher"] >= baseline_metrics["mean_iou_to_teacher"],
+        "reason_similarity_guardrail": candidate_metrics["reason_semantic_similarity"]
+        >= baseline_metrics["reason_semantic_similarity"] - 0.02,
     }
     return {
         "passed": all(checks.values()),
         "checks": checks,
-        "deltas": {
-            "bert_score_f1": bert_delta,
-            "rouge_l": rouge_delta,
-        },
     }

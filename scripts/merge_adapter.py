@@ -41,11 +41,8 @@ def main() -> int:
             "output_dir": str(Path(args.output_dir).resolve()),
         },
     )
-    env_overrides: dict[str, str] = {}
-    force: dict[str, str] = {}
-    if args.cuda_visible_devices is not None:
-        force["CUDA_VISIBLE_DEVICES"] = args.cuda_visible_devices
-    return run_command(cmd, env=merged_env(env_overrides, force=force or None), dry_run=args.dry_run)
+    forced_env = {"CUDA_VISIBLE_DEVICES": args.cuda_visible_devices} if args.cuda_visible_devices is not None else None
+    return run_command(cmd, env=merged_env(force=forced_env), dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

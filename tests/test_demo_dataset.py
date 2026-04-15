@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -22,6 +23,10 @@ class DemoDatasetTest(unittest.TestCase):
             self.assertTrue(paths["images_dir"].exists())
             for sample in DEMO_SAMPLES:
                 self.assertTrue((paths["images_dir"] / sample.filename).exists())
+            rows = [json.loads(line) for line in paths["annotations"].read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(len(rows), len(DEMO_SAMPLES))
+            self.assertIn("teacher_answer", rows[0])
+            self.assertIn("detector_objects", rows[0])
 
 
 if __name__ == "__main__":

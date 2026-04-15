@@ -13,7 +13,7 @@ from qwen_lora.demo_dataset import write_demo_dataset
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Create a tiny demo image-caption dataset for smoke testing.")
+    parser = argparse.ArgumentParser(description="Copy the bundled tiny demo detector-aware crop dataset to another directory.")
     parser.add_argument(
         "--output-dir",
         default="examples/generated_demo_dataset",

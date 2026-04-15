@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "qwen-lora-pipeline"
 version = "0.1.0"
-description = "Minimal Qwen3.5-0.8B image captioning pipeline with ms-swift LoRA SFT and GRPO."
+description = "Minimal Qwen3.5-0.8B detector-aware crop recommendation pipeline with ms-swift LoRA SFT and GRPO."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

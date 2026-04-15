@@ -1,4 +1,4 @@
-"""Qwen3.5-0.8B image-captioning pipeline."""
+"""Qwen3.5-0.8B detector-aware crop recommendation pipeline."""
 
 __all__ = ["__version__"]
 
