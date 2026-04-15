@@ -1,0 +1,45 @@
+env:
+  CUDA_VISIBLE_DEVICES: "0"
+  IMAGE_MAX_TOKEN_NUM: "1024"
+  PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+args:
+  rlhf_type: "grpo"
+  model: "outputs/sft_merged"
+  dataset: "data/processed/grpo_train.jsonl"
+  external_plugins: "plugins/caption_reward.py"
+  reward_funcs:
+    - "caption_semantic"
+    - "caption_rouge"
+    - "caption_format"
+  reward_weights:
+    - 0.6
+    - 0.3
+    - 0.1
+  tuner_type: "lora"
+  target_modules: "all-linear"
+  lora_rank: 8
+  lora_alpha: 32
+  torch_dtype: "bfloat16"
+  enable_thinking: false
+  use_vllm: true
+  vllm_mode: "colocate"
+  # Avoid vLLM reserving KV for full model max_len (e.g. 262k) under low utilization.
+  vllm_max_model_len: 8192
+  vllm_gpu_memory_utilization: 0.35
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  num_generations: 4
+  learning_rate: 2.0e-5
+  num_train_epochs: 1
+  max_length: 1536
+  max_completion_length: 96
+  temperature: 0.7
+  top_p: 0.9
+  save_total_limit: 2
+  logging_steps: 5
+  dataloader_num_workers: 2
+  save_steps: 25
+  save_only_model: true
+  output_dir: "outputs/grpo"
+  report_to:
+    - "tensorboard"

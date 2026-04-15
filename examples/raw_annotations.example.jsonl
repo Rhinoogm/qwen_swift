@@ -1,0 +1,2 @@
+{"image":"./replace/me/image_001.jpg","description":"A dog running on grass.","caption":"A brown dog runs across a grassy field.","split":"train","quality_score":0.98,"sample_id":"dog-001"}
+{"image":"./replace/me/image_002.jpg","description":"Two people cooking in a kitchen.","caption":"Two people prepare food together in a kitchen.","split":"val","quality_score":0.95,"sample_id":"kitchen-001"}

@@ -1,0 +1,150 @@
+Diff --git a/configs/grpo.yaml b/configs/grpo.yaml
+index a7348a6..b1b0bfb 100644
+--- a/configs/grpo.yaml
++++ b/configs/grpo.yaml
+@@ -23,9 +23,7 @@ args:
+   enable_thinking: false
+   use_vllm: true
+   vllm_mode: "colocate"
+-  # Avoid vLLM reserving KV for full model max_len (e.g. 262k) under low utilization.
+-  vllm_max_model_len: 8192
+-  vllm_gpu_memory_utilization: 0.35
++  vllm_gpu_memory_utilization: 0.25
+   per_device_train_batch_size: 1
+   gradient_accumulation_steps: 8
+   num_generations: 4
+diff --git a/plugins/caption_reward.py b/plugins/caption_reward.py
+index c61e029..31d2a8c 100644
+--- a/plugins/caption_reward.py
++++ b/plugins/caption_reward.py
+@@ -10,17 +10,12 @@ sys.path.insert(0, str(ROOT / "src"))
+ from qwen_lora.reward_core import CaptionFormatRules, RougeLScorer, SemanticSimilarityScorer
+ 
+ try:  # pragma: no cover - exercised in training environments where ms-swift is installed
+-    # GRPO resolves reward names from swift.rewards.orms (ms-swift 4.x+).
+-    from swift.rewards import ORM, orms
+-except Exception:  # pragma: no cover - legacy import for older ms-swift
+-    try:
+-        from swift.plugin.orm import ORM, orms  # type: ignore[no-redef,assignment]
+-    except Exception:  # pragma: no cover - keeps local lint/tests lightweight
+-        class ORM:  # type: ignore[override]
+-            def __init__(self, args=None, **kwargs):
+-                pass
++    from swift.plugin.orm import ORM, orms
++except Exception:  # pragma: no cover - keeps local lint/tests lightweight
++    class ORM:  # type: ignore[override]
++        pass
+ 
+-        orms = {}
++    orms = {}
+ 
+ 
+ def _references_from_kwargs(kwargs: dict) -> Sequence[str]:
+@@ -31,8 +26,7 @@ def _references_from_kwargs(kwargs: dict) -> Sequence[str]:
+ 
+ 
+ class CaptionSemanticReward(ORM):
+-    def __init__(self, args=None, **kwargs):
+-        super().__init__(args, **kwargs)
++    def __init__(self) -> None:
+         self.scorer = SemanticSimilarityScorer()
+ 
+     def __call__(self, completions, reference_caption=None, **kwargs):
+@@ -41,8 +35,7 @@ class CaptionSemanticReward(ORM):
+ 
+ 
+ class CaptionRougeReward(ORM):
+-    def __init__(self, args=None, **kwargs):
+-        super().__init__(args, **kwargs)
++    def __init__(self) -> None:
+         self.scorer = RougeLScorer()
+ 
+     def __call__(self, completions, reference_caption=None, **kwargs):
+@@ -51,8 +44,7 @@ class CaptionRougeReward(ORM):
+ 
+ 
+ class CaptionFormatReward(ORM):
+-    def __init__(self, args=None, **kwargs):
+-        super().__init__(args, **kwargs)
++    def __init__(self) -> None:
+         self.rules = CaptionFormatRules()
+ 
+     def __call__(self, completions, **kwargs):
+diff --git a/scripts/merge_adapter.py b/scripts/merge_adapter.py
+index 9e7525b..1d9b6ce 100644
+--- a/scripts/merge_adapter.py
++++ b/scripts/merge_adapter.py
+@@ -41,11 +41,10 @@ def main() -> int:
+             "output_dir": str(Path(args.output_dir).resolve()),
+         },
+     )
+-    env_overrides: dict[str, str] = {}
+-    force: dict[str, str] = {}
++    env_overrides = {}
+     if args.cuda_visible_devices is not None:
+-        force["CUDA_VISIBLE_DEVICES"] = args.cuda_visible_devices
+-    return run_command(cmd, env=merged_env(env_overrides, force=force or None), dry_run=args.dry_run)
++        env_overrides["CUDA_VISIBLE_DEVICES"] = args.cuda_visible_devices
++    return run_command(cmd, env=merged_env(env_overrides), dry_run=args.dry_run)
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/src/qwen_lora/swift_cli.py b/src/qwen_lora/swift_cli.py
+index c0810ef..7e49a0d 100644
+--- a/src/qwen_lora/swift_cli.py
++++ b/src/qwen_lora/swift_cli.py
+@@ -9,11 +9,6 @@ from typing import Any
+ 
+ import yaml
+ 
+-# When set in the parent process, these should not be replaced by YAML `env:` defaults.
+-_ENV_SHELL_WINS_GPU: frozenset[str] = frozenset(
+-    {"CUDA_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES"}
+-)
+-
+ 
+ def repo_root() -> Path:
+     return Path(__file__).resolve().parents[2]
+@@ -48,40 +43,16 @@ def build_swift_command(subcommand: str, args: dict[str, Any]) -> list[str]:
+     return cmd
+ 
+ 
+-def merged_env(
+-    overrides: dict[str, str] | None = None,
+-    *,
+-    force: dict[str, str] | None = None,
+-) -> dict[str, str]:
+-    """Build env for subprocess.run: start from os.environ, apply YAML/config overrides.
+-
+-    Keys in ``_ENV_SHELL_WINS_GPU`` are not overwritten by ``overrides`` when already
+-    present in ``os.environ``, so e.g. ``CUDA_VISIBLE_DEVICES=1 python scripts/run_sft.py``
+-    is respected even if ``configs/sft.yaml`` sets a default. Use ``force=`` for values
+-    that must win (e.g. CLI ``--cuda-visible-devices``).
+-    """
++def merged_env(overrides: dict[str, str] | None = None) -> dict[str, str]:
+     env = os.environ.copy()
+     if overrides:
+-        for key, value in overrides.items():
+-            k = str(key)
+-            if k in _ENV_SHELL_WINS_GPU and k in os.environ:
+-                continue
+-            env[k] = str(value)
+-    if force:
+-        env.update({str(k): str(v) for k, v in force.items()})
++        env.update({key: str(value) for key, value in overrides.items()})
+     return env
+ 
+ 
+-def _print_effective_gpu_env(env: dict[str, str] | None) -> None:
+-    src: dict[str, str] = dict(os.environ) if env is None else env
+-    parts = [f"{name}={src[name]!r}" if name in src else f"{name}=(unset)" for name in sorted(_ENV_SHELL_WINS_GPU)]
+-    print("[qwen-finetune] subprocess GPU env:", " ".join(parts))
+-
+-
+ def run_command(cmd: list[str], *, env: dict[str, str] | None = None, dry_run: bool = False) -> int:
+     rendered = shlex.join(cmd)
+     print(rendered)
+-    _print_effective_gpu_env(env)
+     if dry_run:
+         return 0
+     completed = subprocess.run(cmd, env=env, check=False)

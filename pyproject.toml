@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qwen-lora-pipeline"
+version = "0.1.0"
+description = "Minimal Qwen3.5-0.8B image captioning pipeline with ms-swift LoRA SFT and GRPO."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26",
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+train = [
+  "accelerate>=1.8.0",
+  "bert-score>=0.3.13",
+  "ms-swift==4.1.1",
+  "peft>=0.14.0",
+  "pillow>=10.0.0",
+  "qwen-vl-utils>=0.0.14",
+  "sentence-transformers>=3.4.1",
+  "tensorboard>=2.18.0",
+  "transformers>=5.2.0",
+  "vllm>=0.8.5.post1",
+]
+dev = [
+  "pytest>=8.3.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

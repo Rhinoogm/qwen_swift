@@ -1,0 +1,3 @@
+{"image":"images/dog_001.ppm","description":"A dog running on grass.","caption":"A brown dog runs across a grassy field.","split":"train","quality_score":0.98,"sample_id":"dog-001"}
+{"image":"images/kitchen_001.ppm","description":"Two people cooking in a kitchen.","caption":"Two people prepare food together in a kitchen.","split":"train","quality_score":0.95,"sample_id":"kitchen-001"}
+{"image":"images/street_001.ppm","description":"A busy city street at night.","caption":"Cars and pedestrians move along a brightly lit city street at night.","split":"val","quality_score":0.97,"sample_id":"street-001"}

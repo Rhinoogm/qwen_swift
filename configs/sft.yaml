@@ -1,0 +1,29 @@
+env:
+  CUDA_VISIBLE_DEVICES: "0"
+  IMAGE_MAX_TOKEN_NUM: "1024"
+  PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+args:
+  model: "Qwen/Qwen3.5-0.8B"
+  dataset: "data/processed/sft_train.jsonl"
+  val_dataset: "data/processed/sft_val.jsonl"
+  tuner_type: "lora"
+  target_modules: "all-linear"
+  lora_rank: 8
+  lora_alpha: 32
+  torch_dtype: "bfloat16"
+  enable_thinking: false
+  num_train_epochs: 2
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 8
+  learning_rate: 1.0e-4
+  max_length: 1536
+  split_dataset_ratio: 0.01
+  save_total_limit: 2
+  logging_steps: 10
+  dataloader_num_workers: 4
+  save_steps: 100
+  eval_steps: 100
+  save_only_model: true
+  output_dir: "outputs/sft"
+  report_to:
+    - "tensorboard"

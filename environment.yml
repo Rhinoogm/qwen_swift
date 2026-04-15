@@ -1,0 +1,9 @@
+name: qwen-lora
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - git
+  - setuptools>=68
+  - wheel
