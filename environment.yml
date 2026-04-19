@@ -2,8 +2,10 @@ name: qwen-lora
 channels:
   - conda-forge
 dependencies:
-  - python=3.10
+  - python=3.12
   - pip
   - git
   - setuptools>=68
   - wheel
+
+

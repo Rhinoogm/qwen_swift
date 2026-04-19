@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 from __future__ import annotations
 
@@ -36,12 +37,21 @@ def load_prediction_metrics(path: Path) -> tuple[list[dict[str, object]], dict[s
     scorer = SemanticSimilarityScorer()
     reason_rules = ReasonFormatRules()
     evaluations = []
+    
     for row in rows:
         reference_bbox = parse_bbox_mapping(row["reference_bbox"])
         reference_reason = str(row["reference_reason"])
+        
+        # --- 추가된 부분 (전처리 로직) ---
+        prediction_text = str(row["prediction"])
+        if "</think>" in prediction_text:
+            # </think> 태그 기준으로 문자열을 나누고, 그 뒤에 나오는 실제 JSON 부분만 가져옵니다.
+            prediction_text = prediction_text.split("</think>")[-1].strip()
+        # ---------------------------------
+
         evaluations.append(
             evaluate_prediction(
-                str(row["prediction"]),
+                prediction_text, # 정제된 텍스트를 평가 함수에 전달
                 reference_bbox,
                 reference_reason,
                 semantic_scorer=scorer,
@@ -108,3 +118,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

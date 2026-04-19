@@ -305,9 +305,9 @@ python scripts/generate_teacher_labels.py \
 
 ```bash
 python scripts/prepare_dataset.py \
-  --input data/raw/annotations_with_teacher.jsonl \
-  --output-dir data/processed \
-  --root-dir /data/my_dataset
+  --input data/coco/output_val_with_teacher.jsonl \
+  --output-dir data/coco/processed \
+  --root-dir /home/km_rhino.kim/Documents/1_GIT_REPOS/2_EX_GITS/auto-crop/coco/val2017
 ```
 
 이제 학습에 바로 넣을 수 있는 파일이 생깁니다.
@@ -411,7 +411,7 @@ python scripts/smoke_test.py
 conda env create -f environment.yml
 conda activate qwen-lora
 python -m pip install --upgrade pip setuptools wheel
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
 python -m pip install -e .[train,dev]
 python scripts/check_environment.py --expect-train
 ```
@@ -454,9 +454,14 @@ python scripts/generate_teacher_labels.py \
 
 ```bash
 python scripts/prepare_dataset.py \
-  --input data/raw/annotations_with_teacher.jsonl \
-  --output-dir data/processed \
-  --root-dir /data/my_dataset
+  --input data/coco/val/coco_val_det_autocrop_w_teacher.jsonl \
+  --output-dir data/coco/processed/val \
+  --root-dir /home/km_rhino.kim/Documents/1_GIT_REPOS/2_EX_GITS/auto-crop/coco/val2017
+
+python scripts/prepare_dataset.py \
+  --input data/coco/train/coco_train_det_autocrop_w_teacher.jsonl \
+  --output-dir data/coco/processed \
+  --root-dir /home/km_rhino.kim/Documents/1_GIT_REPOS/2_EX_GITS/auto-crop/coco/train2017
 ```
 
 ### 4. SFT 실행
@@ -470,8 +475,8 @@ python scripts/run_sft.py
 
 ```bash
 python scripts/merge_adapter.py \
-  --adapter-root outputs/sft \
-  --output-dir outputs/sft_merged
+  --adapter-root coco/outputs/sft \
+  --output-dir coco/outputs/sft_merged
 ```
 
 ### 6. GRPO 실행
@@ -484,9 +489,9 @@ python scripts/run_grpo.py
 ### 7. GRPO adapter merge
 
 ```bash
-python scripts/merge_adapter.py \
-  --adapter-root outputs/grpo \
-  --output-dir outputs/final_merged
+CUDA_VISIBLE_DEVICES=2 USE_HF=1 python scripts/merge_adapter.py \
+  --adapter-root coco/outputs/grpo \
+  --output-dir coco/outputs/grpo_merged
 ```
 
 ## 추론과 평가
@@ -494,7 +499,7 @@ python scripts/merge_adapter.py \
 ### 단일 이미지 추론
 
 ```bash
-python scripts/infer.py \
+CUDA_VISIBLE_DEVICES=1 USE_HF=1 python scripts/infer.py \
   --model outputs/final_merged \
   --image /data/my_dataset/images/img-000001.jpg \
   --detector-objects-json detector_objects.json \
@@ -504,9 +509,9 @@ python scripts/infer.py \
 ### 데이터셋 전체 예측
 
 ```bash
-python scripts/predict_dataset.py \
+CUDA_VISIBLE_DEVICES=1 USE_HF=1  python scripts/predict_dataset.py \
   --model outputs/final_merged \
-  --input data/processed/sft_val.jsonl \
+  --input data/coco/processed/sft_val.jsonl \
   --output outputs/predictions/final_val_predictions.jsonl \
   --review-output outputs/reviews/final_val_review.jsonl
 ```
@@ -535,19 +540,19 @@ python scripts/export_final_answers.py \
 ### SFT와 GRPO 비교 평가
 
 ```bash
-python scripts/predict_dataset.py \
-  --model outputs/sft_merged \
-  --input data/processed/sft_val.jsonl \
-  --output outputs/predictions/sft_val_predictions.jsonl
+CUDA_VISIBLE_DEVICES=1 USE_HF=1 python scripts/predict_dataset.py \
+  --model coco/outputs/sft_merged \
+  --input data/coco/processed/val/sft_val.jsonl \
+  --output coco/outputs/predictions/sft_val_predictions.jsonl
 
-python scripts/predict_dataset.py \
-  --model outputs/final_merged \
-  --input data/processed/sft_val.jsonl \
-  --output outputs/predictions/final_val_predictions.jsonl
+CUDA_VISIBLE_DEVICES=2 USE_HF=1 python scripts/predict_dataset.py \
+  --model coco/outputs/grpo_merged \
+  --input data/coco/processed/val/sft_val.jsonl \
+  --output coco/outputs/predictions/gpro_val_predictions.jsonl
 
 python scripts/evaluate.py \
-  --predictions outputs/predictions/final_val_predictions.jsonl \
-  --baseline-predictions outputs/predictions/sft_val_predictions.jsonl
+  --predictions coco/outputs/predictions/gpro_val_predictions.jsonl \
+  --baseline-predictions coco/outputs/predictions/sft_val_predictions.jsonl
 ```
 
 `evaluate.py`는 아래를 봅니다.
@@ -635,3 +640,4 @@ python scripts/evaluate.py \
 - 학습 샘플 수가 너무 많음
 
 처음에는 `--rl-max-samples 100` 정도로 작게 시작하는 편이 안전합니다.
+

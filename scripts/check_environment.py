@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
+
 import json
 import os
 import platform
@@ -149,3 +151,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

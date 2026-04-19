@@ -4,8 +4,8 @@ env:
   PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
 args:
   model: "Qwen/Qwen3.5-0.8B"
-  dataset: "data/processed/sft_train.jsonl"
-  val_dataset: "data/processed/sft_val.jsonl"
+  dataset: "data/coco/processed/train/sft_train.jsonl"
+  val_dataset: "data/coco/processed/val/sft_val.jsonl"
   tuner_type: "lora"
   target_modules: "all-linear"
   lora_rank: 8
@@ -24,6 +24,7 @@ args:
   save_steps: 100
   eval_steps: 100
   save_only_model: true
-  output_dir: "outputs/sft"
+  output_dir: "coco/outputs/sft"
   report_to:
     - "tensorboard"
+
