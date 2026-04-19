@@ -26,6 +26,8 @@ SPECULATIVE_PATTERNS = (
     re.compile(r"\bit appears\b", re.IGNORECASE),
 )
 
+THINK_BLOCK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
 
 def normalize_text(text: str) -> str:
     return " ".join((text or "").strip().split())
@@ -64,6 +66,36 @@ def average(values: Iterable[float]) -> float:
 
 def percent(values: Iterable[float]) -> float:
     return average(values) * 100.0
+
+
+def extract_json_object_text(text: str) -> str:
+    """Extract the JSON object from common model output wrappers.
+
+    Some models still emit reasoning tags, fenced JSON, or a short preamble even
+    when prompted for JSON-only output. Rewards and evaluation should judge the
+    actual answer object instead of failing on harmless wrappers.
+    """
+    cleaned = (text or "").strip()
+    cleaned = THINK_BLOCK_PATTERN.sub("", cleaned).strip()
+    if "</think>" in cleaned.lower():
+        cleaned = re.split(r"</think>", cleaned, flags=re.IGNORECASE)[-1].strip()
+
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if len(lines) >= 2 and lines[0].startswith("```"):
+            if lines[-1].strip() == "```":
+                lines = lines[1:-1]
+            else:
+                lines = lines[1:]
+            cleaned = "\n".join(lines).strip()
+            if cleaned.lower().startswith("json"):
+                cleaned = cleaned[4:].strip()
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and start < end:
+        return cleaned[start : end + 1]
+    return cleaned
 
 
 def _as_float(value: Any, *, field_name: str) -> float:
@@ -176,8 +208,9 @@ def parse_bbox_mapping(value: Mapping[str, Any], *, round_values: bool = False) 
 
 
 def parse_crop_response_json(text: str) -> Mapping[str, Any]:
+    json_text = extract_json_object_text(text)
     try:
-        payload = json.loads((text or "").strip())
+        payload = json.loads(json_text)
     except json.JSONDecodeError as exc:
         raise ValueError(f"prediction is not valid JSON: {exc}") from exc
     if not isinstance(payload, dict):

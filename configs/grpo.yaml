@@ -4,8 +4,8 @@ env:
   PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
 args:
   rlhf_type: "grpo"
-  model: "coco/outputs/sft_merged"
-  dataset: "data/coco/processed/train/grpo_train.jsonl"
+  model: "outputs/sft_merged"
+  dataset: "data/processed/grpo_train.jsonl"
   external_plugins: "plugins/crop_reward.py"
   reward_funcs:
     - "crop_iou"
@@ -40,7 +40,6 @@ args:
   dataloader_num_workers: 2
   save_steps: 25
   save_only_model: true
-  output_dir: "coco/outputs/grpo"
+  output_dir: "outputs/grpo"
   report_to:
     - "tensorboard"
-

@@ -14,6 +14,7 @@ from qwen_lora.reward_core import (
     SemanticSimilarityScorer,
     acceptance_gate,
     evaluate_prediction,
+    extract_json_object_text,
     format_crop_recommendation,
     inspect_prediction_text,
     mean_abs_coord_error,
@@ -36,6 +37,18 @@ class RewardCoreTest(unittest.TestCase):
         parsed = parse_crop_response(rendered, validate_reason=True)
         self.assertEqual(parsed.best_crop.as_dict(), recommendation.best_crop.as_dict())
         self.assertEqual(parsed.reason, recommendation.reason)
+
+    def test_parse_crop_response_accepts_reasoning_wrappers(self) -> None:
+        wrapped = (
+            "<think>internal reasoning</think>\n"
+            "```json\n"
+            '{"best_crop":{"x1":0.1200,"y1":0.1000,"x2":0.8800,"y2":0.9300},'
+            '"reason":"The crop keeps the main subject centered while trimming empty space."}'
+            "\n```"
+        )
+        self.assertTrue(extract_json_object_text(wrapped).startswith("{"))
+        parsed = parse_crop_response(wrapped, validate_reason=True)
+        self.assertEqual(parsed.best_crop.as_dict(), {"x1": 0.12, "y1": 0.1, "x2": 0.88, "y2": 0.93})
 
     def test_inspect_prediction_distinguishes_parse_and_bbox_failures(self) -> None:
         parse_failure = inspect_prediction_text("not-json")

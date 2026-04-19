@@ -74,7 +74,7 @@ def main(args: argparse.Namespace) -> int:
                     }
                 )
         predictions_path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
-        _run([sys.executable, "scripts/evaluate.py", "--predictions", str(predictions_path)], cwd=ROOT)
+        _run([sys.executable, "scripts/evaluate.py", "--predictions", str(predictions_path), "--semantic-fallback"], cwd=ROOT)
 
         review_rows = []
         if prepared_val.exists():

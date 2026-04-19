@@ -15,7 +15,12 @@ from qwen_lora.reward_core import average
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate detector-aware crop annotations and prepare SFT/GRPO JSONL files.")
-    parser.add_argument("--input", required=True, help="Raw annotation JSONL path.")
+    parser.add_argument(
+        "--input",
+        required=True,
+        nargs="+",
+        help="One or more raw annotation JSONL paths. Rows are concatenated before split filtering.",
+    )
     parser.add_argument("--output-dir", required=True, help="Directory for processed JSONL outputs.")
     parser.add_argument("--root-dir", default=None, help="Dataset root for resolving relative image paths.")
     parser.add_argument("--val-ratio", type=float, default=0.01, help="Fallback validation ratio when split is missing.")
@@ -30,9 +35,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    input_path = Path(args.input).resolve()
+    input_paths = [Path(item).resolve() for item in args.input]
     output_dir = Path(args.output_dir).resolve()
-    rows = read_jsonl(input_path)
+    rows = []
+    for input_path in input_paths:
+        rows.extend(read_jsonl(input_path))
 
     normalized = []
     invalid = []
@@ -60,7 +67,7 @@ def main() -> int:
     write_jsonl(grpo_train_path, (to_grpo_record(sample) for sample in rl_samples))
 
     audit = {
-        "input_path": str(input_path),
+        "input_paths": [str(path) for path in input_paths],
         "counts": {
             "raw_rows": len(rows),
             "valid_rows": len(normalized),

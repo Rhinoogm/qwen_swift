@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-import importlib
+import importlib.metadata
 import importlib.util
 
 import json
@@ -25,6 +25,13 @@ TRAIN_PACKAGES = (
     "bert_score",
 )
 
+PACKAGE_DISTRIBUTIONS = {
+    "bert_score": "bert-score",
+    "sentence_transformers": "sentence-transformers",
+    "swift": "ms-swift",
+    "yaml": "PyYAML",
+}
+
 
 def _run_command(cmd: list[str]) -> tuple[int, str]:
     try:
@@ -39,8 +46,11 @@ def _package_info(name: str) -> dict[str, str | bool]:
     spec = importlib.util.find_spec(name)
     if spec is None:
         return {"installed": False}
-    module = importlib.import_module(name)
-    version = getattr(module, "__version__", "unknown")
+    distribution_name = PACKAGE_DISTRIBUTIONS.get(name, name)
+    try:
+        version = importlib.metadata.version(distribution_name)
+    except importlib.metadata.PackageNotFoundError:
+        version = "unknown"
     return {"installed": True, "version": str(version)}
 
 
@@ -151,4 +161,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

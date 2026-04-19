@@ -29,29 +29,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--predictions", required=True, help="Candidate prediction JSONL.")
     parser.add_argument("--baseline-predictions", default=None, help="Optional SFT baseline prediction JSONL.")
     parser.add_argument("--output-json", default=None, help="Optional metrics JSON output path.")
+    parser.add_argument(
+        "--semantic-fallback",
+        action="store_true",
+        help="Use lexical reason similarity instead of loading sentence-transformers.",
+    )
     return parser.parse_args()
 
 
-def load_prediction_metrics(path: Path) -> tuple[list[dict[str, object]], dict[str, float]]:
+def load_prediction_metrics(path: Path, *, semantic_fallback: bool = False) -> tuple[list[dict[str, object]], dict[str, float]]:
     rows = read_jsonl(path)
-    scorer = SemanticSimilarityScorer()
+    scorer = SemanticSimilarityScorer(force_fallback=semantic_fallback)
     reason_rules = ReasonFormatRules()
     evaluations = []
-    
+
     for row in rows:
         reference_bbox = parse_bbox_mapping(row["reference_bbox"])
         reference_reason = str(row["reference_reason"])
-        
-        # --- 추가된 부분 (전처리 로직) ---
-        prediction_text = str(row["prediction"])
-        if "</think>" in prediction_text:
-            # </think> 태그 기준으로 문자열을 나누고, 그 뒤에 나오는 실제 JSON 부분만 가져옵니다.
-            prediction_text = prediction_text.split("</think>")[-1].strip()
-        # ---------------------------------
 
         evaluations.append(
             evaluate_prediction(
-                prediction_text, # 정제된 텍스트를 평가 함수에 전달
+                str(row["prediction"]),
                 reference_bbox,
                 reference_reason,
                 semantic_scorer=scorer,
@@ -93,14 +91,20 @@ def load_autocrop_baseline_metrics(rows: list[dict[str, object]]) -> dict[str, f
 
 def main() -> int:
     args = parse_args()
-    candidate_rows, candidate_metrics = load_prediction_metrics(Path(args.predictions).resolve())
+    candidate_rows, candidate_metrics = load_prediction_metrics(
+        Path(args.predictions).resolve(),
+        semantic_fallback=args.semantic_fallback,
+    )
     payload: dict[str, object] = {
         "candidate": candidate_metrics,
         "autocrop_baseline": load_autocrop_baseline_metrics(candidate_rows),
     }
 
     if args.baseline_predictions:
-        _, baseline_metrics = load_prediction_metrics(Path(args.baseline_predictions).resolve())
+        _, baseline_metrics = load_prediction_metrics(
+            Path(args.baseline_predictions).resolve(),
+            semantic_fallback=args.semantic_fallback,
+        )
         payload["baseline"] = baseline_metrics
         payload["acceptance_gate"] = acceptance_gate(
             candidate_metrics,
@@ -118,5 +122,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-

@@ -1670,7 +1670,3 @@ def render_prompt(detector_objects: Sequence[dict[str, Any]], autocrop_top1: dic
         detector_objects_json=_render_json(list(detector_objects)),
         autocrop_top1_json=_render_json(autocrop_top1),
     )
-
-
-
-

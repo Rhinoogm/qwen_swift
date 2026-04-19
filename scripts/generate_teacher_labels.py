@@ -135,6 +135,7 @@ def main() -> int:
         },
         "invalid_rows": invalid_rows,
     }
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
     audit_path.write_text(json.dumps(audit, indent=2, ensure_ascii=True), encoding="utf-8")
     print(json.dumps(audit["counts"], indent=2))
     print(f"Wrote: {output_path}")

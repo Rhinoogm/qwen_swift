@@ -1,103 +1,38 @@
 # Qwen3.5-0.8B Detector-Aware Crop Recommendation Pipeline
 
-이 저장소는 `이미지 + detector 결과 + auto crop 결과`를 입력으로 받아, 모델이 아래 JSON을 출력하도록 학습하는 최소 파이프라인입니다.
+이 저장소는 `이미지 + detector 결과 + auto crop top1 결과`를 입력으로 받아 최종 crop 추천 JSON을 생성하도록 student 모델을 학습하는 파이프라인입니다.
 
 ```json
 {
   "best_crop": {
-    "x1": 0.1180,
-    "y1": 0.0600,
-    "x2": 0.9020,
-    "y2": 0.9480
+    "x1": 0.118,
+    "y1": 0.06,
+    "x2": 0.902,
+    "y2": 0.948
   },
-  "reason": "The crop keeps the main person fully visible, includes the nearby salient objects, and removes empty background."
+  "reason": "The crop keeps the main person fully visible, includes nearby salient objects, and removes empty background."
 }
 ```
 
-핵심은 세 가지입니다.
+이 저장소가 학습하는 것은 detector나 auto-crop 모델이 아니라, 두 모델의 결과와 이미지를 보고 더 나은 최종 crop을 고르는 작은 student 모델입니다. 기본 흐름은 `teacher label 생성 -> SFT -> LoRA merge -> GRPO -> LoRA merge -> 평가/검수`입니다.
 
-- detector가 이미지 안에 무엇이 어디 있는지 알려줌
-- auto crop 모델이 기본 crop 후보를 하나 제안함
-- 더 큰 teacher 모델이 최종 정답 crop과 이유를 만들어 줌
+## 기본 경로
 
-그 뒤 student 모델인 `Qwen/Qwen3.5-0.8B`를 `SFT -> GRPO` 순서로 학습합니다.
+README와 기본 설정 파일은 아래 경로를 기준으로 맞춰져 있습니다.
 
-이 저장소는 detector나 auto crop 모델 자체를 학습하지 않습니다. 이 저장소는 그 결과물을 받아서 `crop 추천 모델`을 학습시키는 부분만 담당합니다.
+- raw annotation: `data/raw/annotations.jsonl`
+- teacher label 포함 raw annotation: `data/raw/annotations_with_teacher.jsonl`
+- processed dataset: `data/processed/`
+- SFT output: `outputs/sft`
+- merged SFT model: `outputs/sft_merged`
+- GRPO output: `outputs/grpo`
+- merged GRPO model: `outputs/grpo_merged`
 
-## 한눈에 보기
+`configs/sft.yaml`과 `configs/grpo.yaml`도 이 경로를 사용합니다. 다른 경로를 쓰려면 README 명령과 config를 같이 바꾸세요.
 
-### 입력
+## Raw Annotation Schema
 
-- 이미지 1장
-- detector 결과
-- auto crop top1 결과
-
-### 출력
-
-- 최종 crop 좌표 `best_crop`
-- 그 좌표가 좋은 이유 `reason`
-
-### 학습에 쓰는 모델 역할
-
-- `detector`
-  이미지 속 객체의 위치를 찾습니다.
-  예: 사람, 강아지, 자동차 같은 객체와 bbox를 줍니다.
-- `auto crop model`
-  대략 괜찮은 crop을 먼저 제안합니다.
-  예: `x1=0.12, y1=0.08, x2=0.92, y2=0.95`
-- `teacher model`
-  detector 정보와 auto crop 제안을 보고, 더 좋은 최종 crop과 이유를 생성합니다.
-  이 결과가 데이터셋의 정답 `teacher_answer`가 됩니다.
-- `student model`
-  최종적으로 배포하고 싶은 작은 모델입니다.
-  여기서는 `Qwen/Qwen3.5-0.8B`를 씁니다.
-
-## 가장 쉬운 예시
-
-한 장의 강아지 사진이 있다고 가정합니다.
-
-1. detector가 이렇게 말합니다.
-
-```json
-[
-  {
-    "class_id": 0,
-    "class_name": "dog",
-    "box_cx": 0.5990,
-    "box_cy": 0.5700,
-    "box_w": 0.3850,
-    "box_h": 0.4300
-  }
-]
-```
-
-2. auto crop 모델이 이렇게 제안합니다.
-
-```json
-{
-  "x1": 0.3400,
-  "y1": 0.1800,
-  "x2": 0.9000,
-  "y2": 0.9800,
-  "score": 0.7800
-}
-```
-
-3. teacher 모델이 이렇게 최종 정답을 만듭니다.
-
-```json
-{
-  "best_crop": {
-    "x1": 0.3000,
-    "y1": 0.1600,
-    "x2": 0.9200,
-    "y2": 0.9800
-  },
-  "reason": "The crop keeps the running dog fully visible while trimming empty sky and preserving enough grass for context."
-}
-```
-
-4. 그러면 raw annotation 한 줄은 이렇게 됩니다.
+한 줄이 하나의 이미지 샘플입니다. 좌표는 모두 normalized `[0, 1]`입니다.
 
 ```json
 {
@@ -106,177 +41,78 @@
   "split": "train",
   "detector_objects": [
     {
-      "class_id": 0,
+      "class_id": 16,
       "class_name": "dog",
-      "box_cx": 0.5990,
-      "box_cy": 0.5700,
-      "box_w": 0.3850,
-      "box_h": 0.4300
+      "box_cx": 0.599,
+      "box_cy": 0.57,
+      "box_w": 0.385,
+      "box_h": 0.43
     }
   ],
   "autocrop_top1": {
-    "x1": 0.3400,
-    "y1": 0.1800,
-    "x2": 0.9000,
-    "y2": 0.9800,
-    "score": 0.7800
+    "x1": 0.34,
+    "y1": 0.18,
+    "x2": 0.9,
+    "y2": 0.98,
+    "score": 0.78
   },
   "teacher_answer": {
     "best_crop": {
-      "x1": 0.3000,
-      "y1": 0.1600,
-      "x2": 0.9200,
-      "y2": 0.9800
+      "x1": 0.3,
+      "y1": 0.16,
+      "x2": 0.92,
+      "y2": 0.98
     },
     "reason": "The crop keeps the running dog fully visible while trimming empty sky and preserving enough grass for context."
   }
 }
 ```
 
-이 한 줄이 학습 데이터의 기본 단위입니다.
+`teacher_answer`는 teacher label 생성 전에는 없어도 됩니다. `prepare_dataset.py`에는 반드시 포함되어 있어야 합니다.
 
-## 이 저장소가 하는 일
+## 로컬 검증
 
-### 1. raw annotation 검증
-
-`scripts/prepare_dataset.py`
-
-- 이미지 경로가 실제로 존재하는지 확인
-- detector 결과 형식이 맞는지 확인
-- auto crop 좌표가 `0~1` 범위인지 확인
-- teacher 정답 JSON이 올바른지 확인
-
-### 2. 학습용 JSONL 생성
-
-같은 raw 데이터에서 아래 파일을 만듭니다.
-
-- `sft_train.jsonl`
-- `sft_val.jsonl`
-- `grpo_train.jsonl`
-- `audit.json`
-
-### 3. SFT
-
-`scripts/run_sft.py`
-
-- student 모델이 teacher 정답을 그대로 따라 하도록 먼저 학습합니다.
-- 쉽게 말해 “정답 예시를 많이 보여주며 따라 쓰게 하는 단계”입니다.
-
-### 4. merge
-
-`scripts/merge_adapter.py`
-
-- LoRA adapter를 실제 모델 가중치와 합칩니다.
-- 다음 단계에서 편하게 쓰기 위한 중간 정리 단계입니다.
-
-### 5. GRPO
-
-`scripts/run_grpo.py`
-
-- student 출력이 teacher 정답과 더 비슷해지도록 reward를 주며 추가 학습합니다.
-- 이 저장소에서는 다음 reward를 씁니다.
-  - IoU
-  - 좌표 절대 오차
-  - reason 문장 semantic similarity
-
-### 6. 추론과 평가
-
-- `scripts/infer.py`: 이미지 1장 테스트
-- `scripts/predict_dataset.py`: 데이터셋 전체 예측
-- `scripts/evaluate.py`: SFT 결과, GRPO 결과, autocrop baseline 비교
-
-## 데이터셋을 만들 때 무엇을 준비해야 하나
-
-실무 기준으로는 아래 순서를 추천합니다.
-
-### 단계 1. 이미지 모으기
-
-예:
-
-- 상품 이미지
-- 인물 사진
-- SNS 업로드용 원본 이미지
-
-이 저장소는 이미지 파일 자체는 건드리지 않습니다. 경로만 JSONL에 기록합니다.
-
-### 단계 2. detector 돌리기
-
-각 이미지마다 객체 목록을 만듭니다.
-
-필수 필드:
-
-- `class_id`
-- `class_name`
-- `box_cx`
-- `box_cy`
-- `box_w`
-- `box_h`
-
-주의:
-
-- 좌표는 normalized `0~1`이어야 합니다.
-- 픽셀 좌표를 쓰고 있다면 먼저 `image_width`, `image_height`로 나눠서 정규화하세요.
-
-예:
-
-```text
-pixel bbox: x=120, y=40, w=360, h=520 on 600x800 image
-normalized:
-box_cx = (120 + 360/2) / 600
-box_cy = (40 + 520/2) / 800
-box_w  = 360 / 600
-box_h  = 520 / 800
+```bash
+conda create -n qwen-lora-dev python=3.10 -y
+conda activate qwen-lora-dev
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e '.[dev]'
+python scripts/check_environment.py
+python -m unittest discover -s tests -p 'test_*.py'
+python scripts/smoke_test.py
 ```
 
-### 단계 3. auto crop 모델 돌리기
+이 단계는 실제 학습을 하지 않습니다. 데이터 검증, SFT/GRPO command 생성, 평가, 최종 답안 export까지의 배선을 확인합니다.
 
-각 이미지마다 최소한 top1 crop 하나를 만듭니다.
+## 작업 폴더 초기화
 
-필드:
-
-- `x1`
-- `y1`
-- `x2`
-- `y2`
-- `score`
-
-`score`는 현재 학습 reward에 직접 쓰이지 않지만, 나중에 분석할 때 꽤 유용합니다.
-
-### 단계 4. detector 결과와 auto crop 결과를 하나의 raw JSONL로 합치기
-
-이 시점에서는 `teacher_answer`가 없어도 됩니다.
-
-예시:
-
-```json
-{
-  "sample_id": "img-000001",
-  "image": "images/img-000001.jpg",
-  "split": "train",
-  "detector_objects": [...],
-  "autocrop_top1": {
-    "x1": 0.12,
-    "y1": 0.08,
-    "x2": 0.92,
-    "y2": 0.95,
-    "score": 0.81
-  }
-}
+```bash
+python scripts/init_workspace.py --workspace-dir .
 ```
 
-### 단계 5. teacher 모델로 정답 만들기
+생성되는 주요 파일과 폴더입니다.
 
-이 저장소에서는 teacher를 학습 중에 매번 부르지 않습니다.
-먼저 teacher를 오프라인으로 한 번 돌려서 `teacher_answer`를 raw JSONL에 채워 넣습니다.
+- `data/raw/annotations.template.jsonl`
+- `data/demo_dataset/annotations.jsonl`
+- `data/processed/`
+- `outputs/predictions/`
+- `outputs/reviews/`
+- `outputs/final_answers/`
 
-즉:
+데모 데이터셋으로 데이터 준비가 되는지 먼저 확인하려면 아래를 실행합니다.
 
-- 학습 전에 teacher 정답을 미리 생성
-- 학습 중에는 그 정답만 읽어서 비교
+```bash
+python scripts/prepare_dataset.py \
+  --input data/demo_dataset/annotations.jsonl \
+  --output-dir data/processed \
+  --root-dir data/demo_dataset
+```
 
-이 방식이 더 단순하고, 비용도 관리하기 쉽습니다.
+## Teacher Label 생성
 
-실행:
+학습 전에 teacher 모델을 오프라인으로 돌려 `teacher_answer`를 채웁니다. 이미 `teacher_answer`가 있는 row는 기본적으로 재사용됩니다.
+
+### ms-swift 로컬 teacher
 
 ```bash
 python scripts/generate_teacher_labels.py \
@@ -287,275 +123,199 @@ python scripts/generate_teacher_labels.py \
   --temperature 0.0
 ```
 
-운영 팁:
+모든 row에 이미 `teacher_answer`가 있으면 `--model` 없이 검증과 정규화만 할 수 있습니다.
 
-- 이미 `teacher_answer`가 들어 있는 row는 기본적으로 재사용합니다.
-- 즉, 새로 추가한 row만 채우고 싶을 때 같은 스크립트를 다시 돌려도 됩니다.
-- 모든 row에 `teacher_answer`가 이미 있다면 `--model` 없이 실행해서 형식 검증과 정규화만 다시 할 수도 있습니다.
-- 기존 `teacher_answer`를 전부 다시 만들고 싶을 때만 `--overwrite-existing`를 붙이세요.
+```bash
+python scripts/generate_teacher_labels.py \
+  --input data/raw/annotations_with_teacher.jsonl \
+  --output data/raw/annotations_with_teacher.normalized.jsonl \
+  --root-dir /data/my_dataset
+```
 
-이 스크립트는 아래를 자동으로 검사합니다.
+### vLLM OpenAI-compatible server
 
-- teacher 출력이 JSON인지
-- `best_crop` 좌표가 유효한지
-- `reason`이 비어 있지 않은지
-- `reason`이 영어 한 문장인지
+vLLM 서버를 별도로 띄워 둔 경우 더 빠르게 teacher label을 만들 수 있습니다.
 
-### 단계 6. 학습용 파일로 변환
+```bash
+python -m pip install -e '.[teacher]'
+python scripts/generate_teacher_labels_vllm_fast.py \
+  --input data/raw/annotations.jsonl \
+  --output data/raw/annotations_with_teacher.jsonl \
+  --root-dir /data/my_dataset \
+  --base-url http://localhost:8000/v1 \
+  --api-key EMPTY \
+  --served-model-name openbmb/MiniCPM-o-4_5 \
+  --temperature 0.0 \
+  --max-new-tokens 128 \
+  --max-samples 100 \
+  --max-workers 8 \
+  --image-url-mode data_url
+```
+
+빠른 테스트처럼 일부만 생성하려면 `--max-samples 100`처럼 처리할 row 수를 제한하세요. 생략하면 전체 입력을 처리합니다.
+
+기본값은 엄격 검증입니다. `autocrop_top1`이 없는 row를 full-image crop으로 처리해야 할 때만 `--fill-missing-autocrop`을 사용하고, 약간 벗어난 crop 좌표를 잘라서 진행해야 할 때만 `--clip-autocrop`을 사용하세요.
+
+## COCO/Parquet 입력을 Raw JSONL로 변환
+
+새로 추가된 `scripts/create_dataset_for_teacher.py`는 detector parquet와 COCO-style autocrop JSON을 teacher 생성용 raw JSONL로 합칩니다. import 시 자동 실행하지 않고 CLI로만 동작합니다.
+
+```bash
+python -m pip install -e '.[teacher]'
+python scripts/create_dataset_for_teacher.py \
+  --detector-parquet data/coco/train/detector_train2017.parquet \
+  --autocrop-json data/coco/train/coco_annotations_train_onnx_gem.json \
+  --output data/raw/coco_train_det_autocrop.jsonl \
+  --split train \
+  --image-prefix /data/coco/train2017
+```
+
+val 파일도 같은 방식으로 만들 수 있습니다.
+
+```bash
+python scripts/create_dataset_for_teacher.py \
+  --detector-parquet data/coco/val/detector_val2017.parquet \
+  --autocrop-json data/coco/val/coco_annotations_val_onnx_gem.json \
+  --output data/raw/coco_val_det_autocrop.jsonl \
+  --split val \
+  --image-prefix /data/coco/val2017
+```
+
+`--missing-autocrop` 기본값은 `error`입니다. 누락을 의도적으로 제외하려면 `--missing-autocrop skip`, full-image로 대체하려면 `--missing-autocrop full_image`를 명시하세요.
+
+## 학습용 JSONL 생성
+
+teacher label이 채워진 raw JSONL을 SFT/GRPO 입력으로 변환합니다.
 
 ```bash
 python scripts/prepare_dataset.py \
-  --input data/coco/output_val_with_teacher.jsonl \
-  --output-dir data/coco/processed \
-  --root-dir /home/km_rhino.kim/Documents/1_GIT_REPOS/2_EX_GITS/auto-crop/coco/val2017
+  --input data/raw/annotations_with_teacher.jsonl \
+  --output-dir data/processed \
+  --root-dir /data/my_dataset
 ```
 
-이제 학습에 바로 넣을 수 있는 파일이 생깁니다.
-
-## 왜 teacher 모델이 필요한가
-
-이 프로젝트의 강화학습은 “학생이 직접 만든 crop이 진짜로 좋은지”를 외부 crop scorer로 재채점하지 않습니다.
-대신 teacher가 만든 정답과 얼마나 비슷한지를 reward로 씁니다.
-
-즉, teacher의 역할은 두 가지입니다.
-
-- SFT에서 정답 예시 제공
-- GRPO에서 비교 기준 제공
-
-쉽게 말하면:
-
-- detector: 객체 위치 제공
-- auto crop: 초기 제안 제공
-- teacher: 최종 정답 제공
-- student: 최종적으로 배포할 작은 모델
-
-## 학습 단계가 의미하는 것
-
-### SFT는 무엇인가
-
-teacher 정답을 보고 그대로 따라 쓰는 연습입니다.
-
-입력:
-
-- 이미지
-- detector_objects
-- autocrop_top1
-
-출력:
-
-- teacher의 `best_crop`
-- teacher의 `reason`
-
-### GRPO는 무엇인가
-
-student가 답을 생성했을 때, teacher 정답과 얼마나 비슷한지를 reward로 계산해서 더 다듬는 단계입니다.
-
-현재 reward 식:
-
-- `0.70 * IoU(pred_bbox, ref_bbox)`
-- `0.20 * (1 - mean_abs_coord_error)`
-- `0.10 * semantic_similarity(pred_reason, ref_reason)`
-
-즉, 좌표가 가장 중요하고, reason도 약하게 반영합니다.
-
-## 빠른 시작
-
-### 추천 작업 디렉토리 만들기
-
-처음에는 아래 한 번으로 작업 폴더를 맞춰 두는 편이 가장 안전합니다.
+train/val raw 파일이 따로 있다면 한 번에 넘기세요. 두 번 실행하면 같은 출력 파일을 덮어쓸 수 있습니다.
 
 ```bash
-python scripts/init_workspace.py --workspace-dir .
+python scripts/prepare_dataset.py \
+  --input data/raw/coco_train_with_teacher.jsonl data/raw/coco_val_with_teacher.jsonl \
+  --output-dir data/processed
 ```
 
-이 스크립트는 아래를 준비합니다.
+생성 파일입니다.
 
-- `data/raw/annotations.template.jsonl`
-- `data/demo_dataset/annotations.jsonl`
-- `data/processed/`
-- `outputs/predictions/`
-- `outputs/reviews/`
-- `outputs/final_answers/`
+- `data/processed/sft_train.jsonl`
+- `data/processed/sft_val.jsonl`
+- `data/processed/grpo_train.jsonl`
+- `data/processed/audit.json`
 
-권장 사용법:
-
-- 내 데이터셋을 만들 때는 `data/raw/annotations.template.jsonl`를 복사해서 시작
-- 로컬에서 깨지지 않는 흐름을 먼저 확인할 때는 `data/demo_dataset/annotations.jsonl` 사용
-- `data/demo_dataset`은 저장소에 포함된 검증용 예제를 복사한 것이므로 README 절차를 바로 따라가기 좋음
-
-### 로컬에서 연결만 점검하기
-
-```bash
-conda create -n qwen-lora-dev python=3.10 -y
-conda activate qwen-lora-dev
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e .[dev]
-python scripts/check_environment.py
-python -m unittest discover -s tests -p 'test_*.py'
-python scripts/smoke_test.py
-```
-
-이 단계는 실제 학습이 아니라 아래가 잘 연결되는지 확인합니다.
-
-- 작업 디렉토리 초기화
-- 데모 데이터셋 생성
-- 데이터 검증
-- SFT 명령 생성
-- GRPO 명령 생성
-- 평가 스크립트 동작
-- 최종 답안 export
-
-### GPU 서버에서 학습 환경 만들기
+## GPU 학습 환경
 
 ```bash
 conda env create -f environment.yml
 conda activate qwen-lora
 python -m pip install --upgrade pip setuptools wheel
+# CUDA 버전에 맞는 PyTorch wheel index를 사용하세요.
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
-python -m pip install -e .[train,dev]
+python -m pip install -e '.[train,dev]'
 python scripts/check_environment.py --expect-train
 ```
 
-주의:
+학습은 `Linux + NVIDIA GPU + CUDA` 기준입니다. macOS는 데이터 준비와 dry-run 검증 용도로 두는 편이 안전합니다.
 
-- 학습은 보통 `Linux + NVIDIA GPU + CUDA` 기준입니다.
-- macOS는 데이터 준비와 dry-run 확인 용도로 생각하는 편이 맞습니다.
+## SFT
 
-## 실제 학습 순서
-
-### 0. 작업 폴더 초기화
-
-```bash
-python scripts/init_workspace.py --workspace-dir .
-```
-
-### 1. 데모 데이터셋으로 먼저 한 번 검증하기
-
-teacher 모델 없이도 데이터 준비 단계가 깨지지 않는지 먼저 확인할 수 있습니다.
-
-```bash
-python scripts/prepare_dataset.py \
-  --input data/demo_dataset/annotations.jsonl \
-  --output-dir data/processed \
-  --root-dir data/demo_dataset
-```
-
-### 2. teacher 정답 생성
-
-```bash
-python scripts/generate_teacher_labels.py \
-  --model /path/to/teacher-model \
-  --input data/raw/annotations.jsonl \
-  --output data/raw/annotations_with_teacher.jsonl \
-  --root-dir /data/my_dataset
-```
-
-### 3. 학습용 JSONL 생성
-
-```bash
-python scripts/prepare_dataset.py \
-  --input data/coco/val/coco_val_det_autocrop_w_teacher.jsonl \
-  --output-dir data/coco/processed/val \
-  --root-dir /home/km_rhino.kim/Documents/1_GIT_REPOS/2_EX_GITS/auto-crop/coco/val2017
-
-python scripts/prepare_dataset.py \
-  --input data/coco/train/coco_train_det_autocrop_w_teacher.jsonl \
-  --output-dir data/coco/processed \
-  --root-dir /home/km_rhino.kim/Documents/1_GIT_REPOS/2_EX_GITS/auto-crop/coco/train2017
-```
-
-### 4. SFT 실행
+실행 전에 command와 경로를 확인합니다.
 
 ```bash
 python scripts/run_sft.py --dry-run
 python scripts/run_sft.py
 ```
 
-### 5. SFT adapter merge
+기본 config는 아래 입력을 사용합니다.
+
+- `data/processed/sft_train.jsonl`
+- `data/processed/sft_val.jsonl`
+
+## SFT Adapter Merge
 
 ```bash
 python scripts/merge_adapter.py \
-  --adapter-root coco/outputs/sft \
-  --output-dir coco/outputs/sft_merged
+  --adapter-root outputs/sft \
+  --output-dir outputs/sft_merged
 ```
 
-### 6. GRPO 실행
+## GRPO
 
 ```bash
 python scripts/run_grpo.py --dry-run
 python scripts/run_grpo.py
 ```
 
-### 7. GRPO adapter merge
+기본 config는 아래 입력을 사용합니다.
+
+- model: `outputs/sft_merged`
+- dataset: `data/processed/grpo_train.jsonl`
+
+## GRPO Adapter Merge
 
 ```bash
-CUDA_VISIBLE_DEVICES=2 USE_HF=1 python scripts/merge_adapter.py \
-  --adapter-root coco/outputs/grpo \
-  --output-dir coco/outputs/grpo_merged
+python scripts/merge_adapter.py \
+  --adapter-root outputs/grpo \
+  --output-dir outputs/grpo_merged
 ```
 
-## 추론과 평가
-
-### 단일 이미지 추론
+## 추론
 
 ```bash
-CUDA_VISIBLE_DEVICES=1 USE_HF=1 python scripts/infer.py \
-  --model outputs/final_merged \
+python scripts/infer.py \
+  --model outputs/grpo_merged \
   --image /data/my_dataset/images/img-000001.jpg \
   --detector-objects-json detector_objects.json \
   --autocrop-top1-json autocrop_top1.json
 ```
 
-### 데이터셋 전체 예측
+## 데이터셋 예측과 검수 파일 생성
 
 ```bash
-CUDA_VISIBLE_DEVICES=1 USE_HF=1  python scripts/predict_dataset.py \
-  --model outputs/final_merged \
-  --input data/coco/processed/sft_val.jsonl \
-  --output outputs/predictions/final_val_predictions.jsonl \
-  --review-output outputs/reviews/final_val_review.jsonl
+python scripts/predict_dataset.py \
+  --model outputs/grpo_merged \
+  --input data/processed/sft_val.jsonl \
+  --output outputs/predictions/grpo_val_predictions.jsonl \
+  --review-output outputs/reviews/grpo_val_review.jsonl
 ```
 
-`--review-output`을 같이 주면 사람이 직접 수정 가능한 review JSONL도 함께 생성됩니다.
-이 파일은 아래 필드를 포함합니다.
-
-- `model_answer`: 모델이 낸 원본 구조화 답
-- `final_answer`: 최종 배포용 답안. 처음에는 `model_answer`로 채워짐
-- `reference_answer`: teacher 정답
-- `metrics`: IoU, 좌표 오차, parse 성공 여부
-- `notes`: 사람이 수정 사유를 적는 빈 칸
-
-즉, 실제 운영에서는 `outputs/reviews/*.jsonl`만 열어서 `final_answer`를 수정하면 됩니다.
-
-### review 파일에서 최종 답안만 내보내기
+`--review-output`은 사람이 수정 가능한 JSONL입니다. `final_answer`를 수정한 뒤 최종 배포용 파일만 export합니다.
 
 ```bash
 python scripts/export_final_answers.py \
-  --input outputs/reviews/final_val_review.jsonl \
-  --output outputs/final_answers/final_val_answers.jsonl
+  --input outputs/reviews/grpo_val_review.jsonl \
+  --output outputs/final_answers/grpo_val_answers.jsonl
 ```
 
-이 단계에서 `final_answer` 형식이 잘못된 row는 바로 잡아내므로, 배포 직전 검증용으로 쓰기 좋습니다.
+## 평가
 
-### SFT와 GRPO 비교 평가
+SFT와 GRPO를 같은 validation set에서 예측한 뒤 비교합니다.
 
 ```bash
-CUDA_VISIBLE_DEVICES=1 USE_HF=1 python scripts/predict_dataset.py \
-  --model coco/outputs/sft_merged \
-  --input data/coco/processed/val/sft_val.jsonl \
-  --output coco/outputs/predictions/sft_val_predictions.jsonl
+python scripts/predict_dataset.py \
+  --model outputs/sft_merged \
+  --input data/processed/sft_val.jsonl \
+  --output outputs/predictions/sft_val_predictions.jsonl
 
-CUDA_VISIBLE_DEVICES=2 USE_HF=1 python scripts/predict_dataset.py \
-  --model coco/outputs/grpo_merged \
-  --input data/coco/processed/val/sft_val.jsonl \
-  --output coco/outputs/predictions/gpro_val_predictions.jsonl
+python scripts/predict_dataset.py \
+  --model outputs/grpo_merged \
+  --input data/processed/sft_val.jsonl \
+  --output outputs/predictions/grpo_val_predictions.jsonl
 
 python scripts/evaluate.py \
-  --predictions coco/outputs/predictions/gpro_val_predictions.jsonl \
-  --baseline-predictions coco/outputs/predictions/sft_val_predictions.jsonl
+  --predictions outputs/predictions/grpo_val_predictions.jsonl \
+  --baseline-predictions outputs/predictions/sft_val_predictions.jsonl
 ```
 
-`evaluate.py`는 아래를 봅니다.
+`sentence-transformers`가 없는 로컬 환경에서 metric 배선만 확인할 때는 `--semantic-fallback`을 붙이면 lexical similarity로 대체합니다.
+
+평가 항목입니다.
 
 - JSON parse 성공률
 - bbox 유효 비율
@@ -565,79 +325,24 @@ python scripts/evaluate.py \
 - autocrop baseline 대비 개선 여부
 - SFT 대비 GRPO 개선 여부
 
-## 자주 수정하게 되는 파일
+## 스키마 규칙
 
-### detector 출력 형식이 바뀌었을 때
-
-- `src/qwen_lora/data_utils.py`
-
-### 프롬프트 문구를 바꾸고 싶을 때
-
-- `src/qwen_lora/prompting.py`
-
-### 모델 출력 JSON 형식을 바꾸고 싶을 때
-
-- `src/qwen_lora/reward_core.py`
-- `src/qwen_lora/data_utils.py`
-- `tests/test_reward_core.py`
-- `tests/test_data_utils.py`
-
-### reward 비중을 바꾸고 싶을 때
-
-- `plugins/crop_reward.py`
-- `configs/grpo.yaml`
-
-### teacher label 생성 방식을 바꾸고 싶을 때
-
-- `scripts/generate_teacher_labels.py`
-
-### 작업 폴더와 결과물 관리를 바꾸고 싶을 때
-
-- `scripts/init_workspace.py`
-- `scripts/export_final_answers.py`
-
-## 포함된 예시 파일
-
-- `examples/raw_annotations.example.jsonl`
-  raw JSONL 예시
-- `examples/demo_dataset/annotations.jsonl`
-  저장소에 포함된 검증용 작은 데이터셋
-- `scripts/create_demo_dataset.py`
-  포함된 데모 데이터셋을 다른 위치로 복사
-- `scripts/init_workspace.py`
-  `data/`, `outputs/` 기본 구조와 로컬 demo 데이터셋 준비
-- `scripts/export_final_answers.py`
-  review JSONL에서 최종 답안만 검증 후 추출
-- `scripts/smoke_test.py`
-  end-to-end 연결 확인
-
-## 현재 스키마 규칙
-
-- 좌표는 모두 normalized `0~1`
+- 좌표는 모두 normalized `[0, 1]`
 - `best_crop`은 `x1 < x2`, `y1 < y2`
 - `reason`은 영어 한 문장
-- `reason` 최대 40단어
-- markdown, speculative wording 금지
+- `reason`은 최대 40단어
+- markdown, list formatting, speculative wording은 reject
 
-## 자주 막히는 문제
+## 자주 보는 파일
 
-### `image path does not exist`
-
-- `image`가 상대경로인데 `--root-dir`를 빠뜨린 경우가 가장 흔합니다.
-
-### teacher 출력이 reject되는 경우
-
-- JSON object가 아님
-- `best_crop` 좌표 범위가 잘못됨
-- `reason`이 비어 있음
-- `reason`이 여러 문장임
-
-### GRPO가 바로 죽는 경우
-
-- `outputs/sft_merged`가 없음
-- `grpo_train.jsonl`이 비어 있음
-- `reference_bbox`, `reference_reason`가 없음
-- 학습 샘플 수가 너무 많음
-
-처음에는 `--rl-max-samples 100` 정도로 작게 시작하는 편이 안전합니다.
-
+- `src/qwen_lora/data_utils.py`: raw annotation 검증과 SFT/GRPO row 변환
+- `src/qwen_lora/prompting.py`: 모델 입력 prompt
+- `src/qwen_lora/reward_core.py`: JSON 파싱, bbox/reason 검증, 평가 metric
+- `plugins/crop_reward.py`: GRPO reward 함수
+- `configs/sft.yaml`: SFT 설정
+- `configs/grpo.yaml`: GRPO 설정
+- `scripts/create_dataset_for_teacher.py`: detector/autocrop 결과를 raw JSONL로 병합
+- `scripts/generate_teacher_labels.py`: ms-swift 기반 teacher label 생성
+- `scripts/generate_teacher_labels_vllm_fast.py`: vLLM 서버 기반 teacher label 생성
+- `scripts/prepare_dataset.py`: 학습용 JSONL 생성
+- `scripts/smoke_test.py`: 로컬 end-to-end smoke test
