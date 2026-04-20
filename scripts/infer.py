@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from qwen_lora.prompting import render_prompt
+from qwen_lora.prompting import render_prompt, render_student_prompt
 from qwen_lora.reward_core import format_crop_recommendation, parse_crop_response
 
 
@@ -18,8 +18,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run single-image crop recommendation inference.")
     parser.add_argument("--model", required=True, help="Merged model path or base model name.")
     parser.add_argument("--image", required=True, help="Input image path.")
-    parser.add_argument("--detector-objects-json", required=True, help="Inline JSON or a file path for detector_objects.")
-    parser.add_argument("--autocrop-top1-json", required=True, help="Inline JSON or a file path for autocrop_top1.")
+    parser.add_argument("--detector-objects-json", default=None, help="Inline JSON or a file path for detector_objects (teacher mode only).")
+    parser.add_argument("--autocrop-top1-json", default=None, help="Inline JSON or a file path for autocrop_top1 (teacher mode only).")
     parser.add_argument("--adapter", default=None, help="Optional PEFT adapter path.")
     parser.add_argument("--max-new-tokens", type=int, default=128, help="Generation length cap.")
     parser.add_argument("--temperature", type=float, default=0.0, help="Generation temperature.")
@@ -41,12 +41,20 @@ def main() -> int:
     image_path = Path(args.image).resolve()
     if not image_path.exists():
         raise SystemExit(f"Image path does not exist: {image_path}")
-    detector_objects = _load_json_argument(args.detector_objects_json)
-    autocrop_top1 = _load_json_argument(args.autocrop_top1_json)
-    if not isinstance(detector_objects, list):
-        raise SystemExit("detector_objects must decode to a JSON list")
-    if not isinstance(autocrop_top1, dict):
-        raise SystemExit("autocrop_top1 must decode to a JSON object")
+
+    teacher_mode = args.detector_objects_json is not None or args.autocrop_top1_json is not None
+    if teacher_mode:
+        if args.detector_objects_json is None or args.autocrop_top1_json is None:
+            raise SystemExit("Both --detector-objects-json and --autocrop-top1-json must be provided together.")
+        detector_objects = _load_json_argument(args.detector_objects_json)
+        autocrop_top1 = _load_json_argument(args.autocrop_top1_json)
+        if not isinstance(detector_objects, list):
+            raise SystemExit("detector_objects must decode to a JSON list")
+        if not isinstance(autocrop_top1, dict):
+            raise SystemExit("autocrop_top1 must decode to a JSON object")
+        prompt = render_prompt(detector_objects, autocrop_top1)
+    else:
+        prompt = render_student_prompt()
 
     os.environ["IMAGE_MAX_TOKEN_NUM"] = str(args.image_max_token_num)
 
@@ -61,7 +69,7 @@ def main() -> int:
     engine = TransformersEngine(model, template=template)
 
     infer_request = InferRequest(
-        messages=[{"role": "user", "content": render_prompt(detector_objects, autocrop_top1)}],
+        messages=[{"role": "user", "content": prompt}],
         images=[str(image_path)],
     )
     request_config = RequestConfig(max_tokens=args.max_new_tokens, temperature=args.temperature)

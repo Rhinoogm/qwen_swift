@@ -1,6 +1,6 @@
 # Qwen3.5-0.8B Detector-Aware Crop Recommendation Pipeline
 
-이 저장소는 `이미지 + detector 결과 + auto crop top1 결과`를 입력으로 받아 최종 crop 추천 JSON을 생성하도록 student 모델을 학습하는 파이프라인입니다.
+이 저장소는 이미지와 구도 가이던스만으로 최종 crop 추천 JSON(`best_crop` + `reason` + `guidance_id`)을 생성하도록 student 모델을 학습하는 파이프라인입니다. Teacher label 생성 시에는 detector 결과와 autocrop top1도 활용하지만, student 추론 단계에서는 이미지와 guidance만 사용합니다.
 
 ```json
 {
@@ -10,11 +10,19 @@
     "x2": 0.902,
     "y2": 0.948
   },
-  "reason": "The crop keeps the main person fully visible, includes nearby salient objects, and removes empty background."
+  "reason": "The crop keeps the main person fully visible, includes nearby salient objects, and removes empty background.",
+  "guidance_id": 2
 }
 ```
 
-이 저장소가 학습하는 것은 detector나 auto-crop 모델이 아니라, 두 모델의 결과와 이미지를 보고 더 나은 최종 crop을 고르는 작은 student 모델입니다. 기본 흐름은 `teacher label 생성 -> SFT -> LoRA merge -> GRPO -> LoRA merge -> 평가/검수`입니다.
+이 저장소가 학습하는 것은 detector나 auto-crop 모델이 아니라, 이미지와 구도 가이던스를 보고 최종 crop을 추천하는 작은 student 모델입니다. 기본 흐름은 `teacher label 생성 -> SFT -> LoRA merge -> GRPO -> LoRA merge -> 평가/검수`입니다.
+
+**파이프라인 입출력 구분**
+
+| 단계 | 입력 | 출력 |
+|------|------|------|
+| Teacher label 생성 | image + guidance + detector objects + autocrop top1 | `best_crop` + `reason` + `guidance_id` |
+| Student 학습 / 추론 | image + guidance만 | `best_crop` + `reason` + `guidance_id` |
 
 ## 기본 경로
 
@@ -63,7 +71,8 @@ README와 기본 설정 파일은 아래 경로를 기준으로 맞춰져 있습
       "x2": 0.92,
       "y2": 0.98
     },
-    "reason": "The crop keeps the running dog fully visible while trimming empty sky and preserving enough grass for context."
+    "reason": "The crop keeps the running dog fully visible while trimming empty sky and preserving enough grass for context.",
+    "guidance_id": 5
   }
 }
 ```
@@ -111,6 +120,8 @@ python scripts/prepare_dataset.py \
 ## Teacher Label 생성
 
 학습 전에 teacher 모델을 오프라인으로 돌려 `teacher_answer`를 채웁니다. 이미 `teacher_answer`가 있는 row는 기본적으로 재사용됩니다.
+
+> **주의:** `guidance_id`가 포함된 teacher 답변을 얻으려면 teacher label을 재생성해야 합니다. 기존 `teacher_answer`에는 `guidance_id`가 없으므로 GRPO의 `crop_guidance` reward가 동작하려면 아래 스크립트를 다시 실행해 레이블을 갱신하세요.
 
 ### ms-swift 로컬 teacher
 
@@ -257,6 +268,15 @@ python scripts/run_grpo.py
 - model: `outputs/sft_merged`
 - dataset: `data/processed/grpo_train.jsonl`
 
+**Reward 가중치**
+
+| reward_func | 가중치 | 설명 |
+|---|---|---|
+| `crop_iou` | 0.50 | teacher bbox 대비 IoU |
+| `crop_coord` | 0.15 | teacher bbox 대비 좌표 MAE |
+| `crop_reason_semantic` | 0.20 | reason 의미 유사도 |
+| `crop_guidance` | 0.15 | guidance_id 분류 정확도 |
+
 ## GRPO Adapter Merge
 
 ```bash
@@ -267,12 +287,12 @@ python scripts/merge_adapter.py \
 
 ## 추론
 
+student 모델은 이미지만으로 추론합니다. `--detector-objects-json` / `--autocrop-top1-json` 인자는 더 이상 필요하지 않습니다.
+
 ```bash
 python scripts/infer.py \
   --model outputs/grpo_merged \
-  --image /data/my_dataset/images/img-000001.jpg \
-  --detector-objects-json detector_objects.json \
-  --autocrop-top1-json autocrop_top1.json
+  --image /data/my_dataset/images/img-000001.jpg
 ```
 
 ## 데이터셋 예측과 검수 파일 생성

@@ -141,12 +141,16 @@ class BoundingBox:
 class CropRecommendation:
     best_crop: BoundingBox
     reason: str
+    guidance_id: int | None = None
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        d: dict[str, object] = {
             "best_crop": self.best_crop.as_dict(),
             "reason": normalize_text(self.reason),
         }
+        if self.guidance_id is not None:
+            d["guidance_id"] = self.guidance_id
+        return d
 
 
 @dataclass(frozen=True)
@@ -166,6 +170,7 @@ class PredictionMetrics:
     iou: float
     coord_mae: float
     reason_similarity: float
+    guidance_match: bool = False
 
 
 @dataclass(frozen=True)
@@ -230,9 +235,16 @@ def coerce_crop_recommendation(
         raise ValueError("best_crop must be an object")
     if not isinstance(reason, str):
         raise ValueError("reason must be a string")
+    raw_gid = payload.get("guidance_id")
+    guidance_id: int | None = None
+    if isinstance(raw_gid, (int, float)) and not isinstance(raw_gid, bool):
+        int_gid = int(raw_gid)
+        if 1 <= int_gid <= 6:
+            guidance_id = int_gid
     recommendation = CropRecommendation(
         best_crop=parse_bbox_mapping(best_crop, round_values=round_values),
         reason=normalize_text(reason),
+        guidance_id=guidance_id,
     )
     if validate_reason:
         errors = ReasonFormatRules().validate(recommendation.reason)
@@ -250,17 +262,21 @@ def format_crop_recommendation(recommendation: CropRecommendation) -> str:
     bbox = recommendation.best_crop.rounded()
     reason = normalize_text(recommendation.reason)
     escaped_reason = json.dumps(reason, ensure_ascii=True)
-    return (
-        "{\n"
-        '  "best_crop": {\n'
-        f'    "x1": {bbox.x1:.4f},\n'
-        f'    "y1": {bbox.y1:.4f},\n'
-        f'    "x2": {bbox.x2:.4f},\n'
-        f'    "y2": {bbox.y2:.4f}\n'
-        "  },\n"
-        f'  "reason": {escaped_reason}\n'
-        "}"
-    )
+    lines = [
+        "{",
+        '  "best_crop": {',
+        f'    "x1": {bbox.x1:.4f},',
+        f'    "y1": {bbox.y1:.4f},',
+        f'    "x2": {bbox.x2:.4f},',
+        f'    "y2": {bbox.y2:.4f}',
+        "  },",
+        f'  "reason": {escaped_reason}',
+    ]
+    if recommendation.guidance_id is not None:
+        lines[-1] += ","
+        lines.append(f'  "guidance_id": {recommendation.guidance_id}')
+    lines.append("}")
+    return "\n".join(lines)
 
 
 def inspect_prediction_text(text: str) -> PredictionInspection:
@@ -390,6 +406,7 @@ def evaluate_prediction(
     reference_bbox: BoundingBox,
     reference_reason: str,
     *,
+    reference_guidance_id: int | None = None,
     semantic_scorer: SemanticSimilarityScorer | None = None,
     reason_rules: ReasonFormatRules | None = None,
 ) -> PredictionMetrics:
@@ -404,6 +421,7 @@ def evaluate_prediction(
             iou=0.0,
             coord_mae=1.0,
             reason_similarity=0.0,
+            guidance_match=False,
         )
     if not inspection.valid_bbox or inspection.recommendation is None:
         return PredictionMetrics(
@@ -413,9 +431,15 @@ def evaluate_prediction(
             iou=0.0,
             coord_mae=1.0,
             reason_similarity=0.0,
+            guidance_match=False,
         )
 
     reason_format_ok = not reason_rules.validate(inspection.recommendation.reason)
+    guidance_match = (
+        reference_guidance_id is not None
+        and inspection.recommendation.guidance_id is not None
+        and inspection.recommendation.guidance_id == reference_guidance_id
+    )
     return PredictionMetrics(
         parse_ok=True,
         valid_bbox=True,
@@ -423,6 +447,7 @@ def evaluate_prediction(
         iou=bbox_iou(inspection.recommendation.best_crop, reference_bbox),
         coord_mae=mean_abs_coord_error(inspection.recommendation.best_crop, reference_bbox),
         reason_similarity=semantic_scorer.score(inspection.recommendation.reason, reference_reason),
+        guidance_match=guidance_match,
     )
 
 

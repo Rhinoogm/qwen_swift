@@ -86,6 +86,21 @@ class CropReasonSemanticReward(ORM):
         return rewards
 
 
+class CropGuidanceReward(ORM):
+    def __call__(self, completions, reference_guidance_id=None, **kwargs):
+        references = reference_guidance_id or kwargs.get("reference_guidance_id")
+        rewards = []
+        for completion, ref_gid in zip(completions, references):
+            inspection = inspect_prediction_text(completion)
+            if not inspection.valid_bbox or inspection.recommendation is None:
+                rewards.append(0.0)
+                continue
+            predicted_gid = inspection.recommendation.guidance_id
+            rewards.append(1.0 if (predicted_gid is not None and predicted_gid == ref_gid) else 0.0)
+        return rewards
+
+
 orms["crop_iou"] = CropIoUReward
 orms["crop_coord"] = CropCoordReward
 orms["crop_reason_semantic"] = CropReasonSemanticReward
+orms["crop_guidance"] = CropGuidanceReward

@@ -150,7 +150,8 @@ def extract_raw_response_bundle(completion: Any) -> dict[str, Any]:
 def parse_response_to_teacher_answer(raw_text: str):
     payload = json.loads(extract_json_object_text(raw_text))
     payload = normalize_teacher_payload(payload)
-    return parse_crop_response(json.dumps(payload, ensure_ascii=True), validate_reason=True)
+    # Strict reason rules (single sentence, etc.) are optional at ingest; run audit_teacher_dataset to flag format issues.
+    return parse_crop_response(json.dumps(payload, ensure_ascii=True), validate_reason=False)
 
 
 def parse_response_bundle_to_teacher_answer(raw_bundle: dict[str, Any]):

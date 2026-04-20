@@ -105,7 +105,7 @@ def main() -> int:
                 images=[sample.image_path],
             )
             response = engine_obj.infer([infer_request], request_config=request_config_obj)[0]
-            teacher_answer = parse_crop_response_obj(response.choices[0].message.content.strip(), validate_reason=True)
+            teacher_answer = parse_crop_response_obj(response.choices[0].message.content.strip(), validate_reason=False)
             updated = dict(row)
             updated["teacher_answer"] = teacher_answer.as_dict()
             generated_rows.append(updated)

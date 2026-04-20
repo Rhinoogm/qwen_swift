@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from .prompting import render_prompt
+from .prompting import render_prompt, render_student_prompt
 from .reward_core import (
     CropRecommendation,
     bbox_iou,
@@ -200,12 +200,13 @@ def to_sft_record(sample: NormalizedSample) -> dict[str, Any]:
     return {
         "sample_id": sample.sample_id,
         "messages": [
-            {"role": "user", "content": render_prompt(sample.detector_objects, sample.autocrop_top1)},
+            {"role": "user", "content": render_student_prompt()},
             {"role": "assistant", "content": format_crop_recommendation(teacher_answer)},
         ],
         "images": [sample.image_path],
         "reference_bbox": teacher_answer.best_crop.as_dict(),
         "reference_reason": teacher_answer.reason,
+        "reference_guidance_id": teacher_answer.guidance_id,
         "autocrop_top1": sample.autocrop_top1,
         "detector_objects": sample.detector_objects,
     }
@@ -216,11 +217,12 @@ def to_grpo_record(sample: NormalizedSample) -> dict[str, Any]:
     return {
         "sample_id": sample.sample_id,
         "messages": [
-            {"role": "user", "content": render_prompt(sample.detector_objects, sample.autocrop_top1)},
+            {"role": "user", "content": render_student_prompt()},
         ],
         "images": [sample.image_path],
         "reference_bbox": teacher_answer.best_crop.as_dict(),
         "reference_reason": teacher_answer.reason,
+        "reference_guidance_id": teacher_answer.guidance_id,
         "autocrop_top1": sample.autocrop_top1,
         "detector_objects": sample.detector_objects,
     }
